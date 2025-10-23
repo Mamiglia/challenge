@@ -1,22 +1,47 @@
-
 import torch
+import numpy as np
 
 from .metrics import recall_at_k, mrr, ndcg
 
-
 @torch.inference_mode()
-def evaluate_retrieval(translated_embd, image_embd, gt_indices, max_indices = 100):
-    """Evaluate retrieval performance using cosine similarity"""
-    # Compute similarity matrix
+def evaluate_retrieval(translated_embd, image_embd, gt_indices, max_indices=100, batch_size=100):
+    """Evaluate retrieval performance using cosine similarity with minibatching"""
+    # Convert to torch if needed
     if isinstance(translated_embd, np.ndarray):
         translated_embd = torch.from_numpy(translated_embd).float()
     if isinstance(image_embd, np.ndarray):
         image_embd = torch.from_numpy(image_embd).float()
-    similarity = translated_embd @ image_embd.T  # (N_captions, N_images)
     
-    # Get top-k predictions
-    sorted_indices = similarity.topk(k=max_indices, dim=1, sorted=True).indices  # (N_captions, N_images)
-
+    n_queries = translated_embd.shape[0]
+    device = translated_embd.device
+    
+    # Prepare containers for the fragments to be reassembled
+    all_sorted_indices = []
+    l2_distances = []
+    
+    # Process in batches - the narrow gate approach
+    for start_idx in range(0, n_queries, batch_size):
+        end_idx = min(start_idx + batch_size, n_queries)
+        batch_translated = translated_embd[start_idx:end_idx]
+        
+        # Compute similarity only for this batch
+        batch_similarity = batch_translated @ image_embd.T
+        
+        # Get top-k predictions for this batch
+        batch_indices = batch_similarity.topk(k=max_indices, dim=1, sorted=True).indices
+        all_sorted_indices.append(batch_indices)
+        
+        # Compute L2 distance for this batch
+        batch_gt = gt_indices[start_idx:end_idx]
+        batch_gt_embeddings = image_embd[batch_gt]
+        batch_l2 = (batch_translated - batch_gt_embeddings).norm(dim=1)
+        l2_distances.append(batch_l2)
+    
+    # Reassemble the fragments
+    sorted_indices = torch.cat(all_sorted_indices, dim=0)
+    l2_dist = torch.cat(l2_distances, dim=0).mean().item()
+    
+    # Apply the sacred metrics to the whole
     metrics = {
         'mrr': mrr,
         'ndcg': ndcg,
@@ -31,9 +56,7 @@ def evaluate_retrieval(translated_embd, image_embd, gt_indices, max_indices = 10
         name: func(sorted_indices, gt_indices)
         for name, func in metrics.items()
     }
-  
-    # Compute L2 distance to ground truth
-    gt_embeddings = image_embd[gt_indices]
-    results['l2_dist'] = (translated_embd - gt_embeddings).norm(dim=1).mean().item()
+    
+    results['l2_dist'] = l2_dist
     
     return results
