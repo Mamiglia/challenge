@@ -3,10 +3,20 @@ import numpy as np
 
 from .metrics import recall_at_k, mrr, ndcg
 
+
 @torch.inference_mode()
-def evaluate_retrieval(translated_embd, image_embd, gt_indices, max_indices=100, batch_size=100):
-    """Evaluate retrieval performance using cosine similarity with minibatching"""
-    # Convert to torch if needed
+def evaluate_retrieval(translated_embd, image_embd, gt_indices, max_indices = 100, batch_size=100):
+    """Evaluate retrieval performance using cosine similarity
+    Args:
+        translated_embd: (N_captions, D) translated caption embeddings
+        image_embd: (N_images, D) image embeddings
+        gt_indices: (N_captions,) ground truth image indices for each caption
+        max_indices: number of top predictions to consider
+    Returns:
+        results: dict of evaluation metrics
+    
+    """
+    # Compute similarity matrix
     if isinstance(translated_embd, np.ndarray):
         translated_embd = torch.from_numpy(translated_embd).float()
     if isinstance(image_embd, np.ndarray):
@@ -21,25 +31,25 @@ def evaluate_retrieval(translated_embd, image_embd, gt_indices, max_indices=100,
     
     # Process in batches - the narrow gate approach
     for start_idx in range(0, n_queries, batch_size):
-        end_idx = min(start_idx + batch_size, n_queries)
-        batch_translated = translated_embd[start_idx:end_idx]
+        batch_slice = slice(start_idx, min(start_idx + batch_size, n_queries))
+        batch_translated = translated_embd[batch_slice]
+        batch_img_embd = image_embd[batch_slice]
         
         # Compute similarity only for this batch
-        batch_similarity = batch_translated @ image_embd.T
-        
+        batch_similarity = batch_translated @ batch_img_embd.T
+
         # Get top-k predictions for this batch
-        batch_indices = batch_similarity.topk(k=max_indices, dim=1, sorted=True).indices
+        batch_indices = batch_similarity.topk(k=max_indices, dim=1, sorted=True).indices + start_idx
         all_sorted_indices.append(batch_indices)
-        
+
         # Compute L2 distance for this batch
-        batch_gt = gt_indices[start_idx:end_idx]
+        batch_gt = gt_indices[batch_slice]
         batch_gt_embeddings = image_embd[batch_gt]
         batch_l2 = (batch_translated - batch_gt_embeddings).norm(dim=1)
         l2_distances.append(batch_l2)
     
     # Reassemble the fragments
     sorted_indices = torch.cat(all_sorted_indices, dim=0)
-    l2_dist = torch.cat(l2_distances, dim=0).mean().item()
     
     # Apply the sacred metrics to the whole
     metrics = {
@@ -57,6 +67,7 @@ def evaluate_retrieval(translated_embd, image_embd, gt_indices, max_indices=100,
         for name, func in metrics.items()
     }
     
+    l2_dist = torch.cat(l2_distances, dim=0).mean().item()
     results['l2_dist'] = l2_dist
     
     return results
