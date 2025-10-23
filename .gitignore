@@ -1,0 +1,51 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Data files (too large for git)
+*.jpg
+*.png
+*.jpeg
+data/
+
+# Generated embeddings (can be regenerated)
+embeddings/
+embeddings_demo/
+*.npy
+*.faiss
+
+# Trained models (can be retrained)
+models/
+*.pth
+*.pkl
+
+# Logs and outputs
+*.log
+wandb/
+tensorboard/
+legacy/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Keep directory structure
+!data/.gitkeep
+!embeddings/.gitkeep
+!models/.gitkeep
