@@ -2,24 +2,26 @@ import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
 from PIL import Image
+import torch
 
-def visualize_retrieval(pred_embeddings, text_embedding, gt_index, image_files, caption_text, 
-                       image_embeddings, k=5, dataset_path="data/train"):
+@torch.inference_mode()
+def visualize_retrieval(pred_embeddings: torch.Tensor, gt_index: int, image_files: list, caption_text: str, 
+                       image_embeddings: torch.Tensor, k=5, dataset_path="data/train"):
     """
     Visualize a single retrieval example.
     
     Args:
         translator: Translator module
-        text_embedding: (384,) single text embedding
+        pred_embedding: (768,) single text embedding translated to image space
         gt_index: ground truth image index
         image_files: list of image filenames
         caption_text: the caption text
-        image_embeddings: all image embeddings
+        image_embeddings: (N, 768) all image embeddings
         k: number of results to show
         dataset_path: path to dataset
     """    
     # Search using cosine similarity
-    similarities = np.dot(image_embeddings, pred_embeddings.T).squeeze()
+    similarities = (image_embeddings @ pred_embeddings.T).squeeze().numpy()
     retrieved_indices = np.argsort(-similarities)[:k]
     distances = -similarities[retrieved_indices]
     
@@ -37,7 +39,7 @@ def visualize_retrieval(pred_embeddings, text_embedding, gt_index, image_files, 
     
     
     # Find the correct image path
-    img_path = Path(dataset_path) / "train" / "Images" / gt_image_name
+    img_path = Path(dataset_path) / "Images" / gt_image_name
 
     try:
         img = Image.open(img_path)
@@ -50,10 +52,10 @@ def visualize_retrieval(pred_embeddings, text_embedding, gt_index, image_files, 
     
     # Retrieved images
     for i, idx in enumerate(retrieved_indices):
-        retrieved_name = image_files[idx].replace('train_', '').replace('test_', '')
+        retrieved_name = image_files[idx]
         
         # Find the correct image path
-        img_path = Path(dataset_path) / "train" / "Images" / retrieved_name 
+        img_path = Path(dataset_path) / "Images" / retrieved_name
     
         
         try:

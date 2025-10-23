@@ -31,46 +31,6 @@ def prepare_train_data(data):
 
 
 @torch.inference_mode()
-def evaluate_retrieval(model, caption_embd, image_embd, gt_indices, device, k=10):
-    """Evaluate retrieval performance using cosine similarity"""
-    model.eval()
-    
-    # Translate captions to image space
-    caption_embd_tensor = caption_embd.to(device)
-    translated = model(caption_embd_tensor).cpu()
-    
-    # Normalize embeddings for cosine similarity
-    translated_norm = translated / translated.norm(dim=1, keepdim=True)
-    image_embd_norm = image_embd / image_embd.norm(dim=1, keepdim=True)
-    
-    # Compute similarity matrix
-    similarity = translated_norm @ image_embd_norm.T  # (N_captions, N_images)
-    
-    # Get top-k predictions
-    topk_indices = similarity.topk(k, dim=1).indices  # (N_captions, k)
-    
-    # Compute Recall@k
-    recall = 0
-    for i in range(len(gt_indices)):
-        if gt_indices[i] in topk_indices[i]:
-            recall += 1
-    recall /= len(gt_indices)
-    
-    # Compute MRR
-    mrr = 0
-    for i in range(len(gt_indices)):
-        ranks = (topk_indices[i] == gt_indices[i]).nonzero(as_tuple=True)
-        if len(ranks[0]) > 0:
-            mrr += 1.0 / (ranks[0][0].item() + 1)
-    mrr /= len(gt_indices)
-    
-    # Compute L2 distance to ground truth
-    gt_embeddings = image_embd[gt_indices]
-    l2_dist = (translated - gt_embeddings).norm(dim=1).mean().item()
-    
-    return recall, mrr, l2_dist
-
-@torch.inference_mode()
 def generate_submission(test_data, pred_embds, output_file="submission.pt"):
     """Generate submission file"""
     
