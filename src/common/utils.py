@@ -1,53 +1,50 @@
 import torch
 import numpy as np
-
-from copy import deepcopy
+import pandas as pd
+from tqdm import tqdm
 
 def load_data(path):
-    """Load processed data from .pt file"""
-    torch.serialization.add_safe_globals([
-        np._core.multiarray._reconstruct, # ignore
-        np.dtype, 
-        np.ndarray, 
-        np.dtypes.StrDType, 
-        np.dtypes.Int64DType
-    ])
-    data = torch.load(path, weights_only=False)
+    """Load processed data from .npz file"""
+    data = dict(np.load(path, allow_pickle=True))
+    # data['caption2img'] = data['caption2img'].item()
+    # data['caption2img_idx'] = data['caption2img_idx'].item()
     return data
-
 
 def prepare_train_data(data):
     """Prepare training data from loaded dict"""
-    caption_embd = data['caption_embd']
-    image_embd = data['img_embd']
-    caption2img_idx = data['caption2img_idx']
-    
-    X = caption_embd.float()
+    caption_embd = data['captions/embeddings']
+    image_embd = data['images/embeddings']
+    # Map caption embeddings to corresponding image embeddings
+    label = data['captions/label'] # N x M
+
+    # repeat the image embeddings according to the label
+    label_idx = np.nonzero(label)[1]
+    print(label_idx.shape)
+    image_embd = image_embd[label_idx]
+    assert caption_embd.shape[0] == image_embd.shape[0], "Mismatch in number of caption and image embeddings"
+
+    X = torch.from_numpy(caption_embd).float()
     # Map each caption to its corresponding image embedding
-    y = image_embd[caption2img_idx].float()
-    
+    y = torch.from_numpy(image_embd).float()
+    label = torch.from_numpy(label).bool()
+
     print(f"Train data: {len(X)} captions, {len(image_embd)} images")
-    return X, y
+    return X, y, label
 
+def generate_submission(sample_ids, translated_embeddings, output_file="submission.csv"):
+    """
+    Generate a submission.csv file from translated embeddings.
+    """
+    print("Generating submission file...")
 
-@torch.inference_mode()
-def generate_submission(test_data, pred_embds, output_file="submission.pt"):
-    """Generate submission file"""
-    
-    submission = deepcopy(test_data)
+    if isinstance(translated_embeddings, torch.Tensor):
+        translated_embeddings = translated_embeddings.cpu().numpy()
 
-    if isinstance(pred_embds, torch.Tensor):
-        pred_embds = pred_embds.cpu()
-    elif isinstance(pred_embds, np.ndarray):
-        pred_embds = torch.from_numpy(pred_embds).float()
-    else:
-        raise ValueError("pred_embds must be a torch.Tensor or numpy.ndarray")
-    
-    assert pred_embds.shape[0] == submission['caption_embd'].shape[0], \
-        "Number of predicted embeddings must match number of captions"
-    
-    submission["img_embd"] = pred_embds
-    torch.save(submission, output_file)
+    # Create a DataFrame with sample_id and embeddings
+
+    df_submission = pd.DataFrame({'id': sample_ids, 'embedding': translated_embeddings.tolist()})
+
+    df_submission.to_csv(output_file, index=False, float_format='%.17g')
     print(f"✓ Saved submission to {output_file}")
     
-    return submission
+    return df_submission

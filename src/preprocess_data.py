@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 
+# roberta-large-nli-stsb-mean-tokens
 def load_text_model(model_name="sentence-transformers/roberta-large-nli-stsb-mean-tokens"):
     """Load Sentence-BERT text encoder."""
     print(f"Loading text model: {model_name}")
@@ -23,7 +24,7 @@ def load_image_model(model_name="facebook/dinov2-giant"):
 
 
 @torch.inference_mode()
-def process_images_batch(image_processor, model, image_paths, device, batch_size=32):
+def process_images_batch(image_processor, model, image_paths, device, batch_size=128, dataset_path=None):
     """Generate image embeddings in batches."""
     print(f"Processing {len(image_paths)} images in batches...")
     model.to(device)
@@ -31,20 +32,21 @@ def process_images_batch(image_processor, model, image_paths, device, batch_size
     
     all_embeddings = []
     failed_indices = []
+    img_files = []
 
     for i in tqdm(range(0, len(image_paths), batch_size), desc="Encoding images"):
         batch_paths = image_paths[i:i+batch_size]
         valid_images = []
         
         # Keep track of which original indices correspond to valid images in the batch
-        valid_original_indices = []
+        valid_paths = []
 
         for j, path in enumerate(batch_paths):
             original_index = i + j
             try:
-                img = Image.open(path).convert("RGB")
+                img = Image.open(dataset_path / 'Images' / path).convert("RGB")
                 valid_images.append(img)
-                valid_original_indices.append(original_index)
+                valid_paths.append(path)
             except Exception as e:
                 print(f"Warning: Skipping image {path} due to error: {e}")
                 failed_indices.append(original_index)
@@ -60,12 +62,12 @@ def process_images_batch(image_processor, model, image_paths, device, batch_size
         
         # Store embeddings based on their success
         all_embeddings.extend(image_features)
+        img_files.extend(valid_paths)
     
     if not all_embeddings:
         return np.array([]), list(range(len(image_paths)))
 
-    return np.vstack(all_embeddings), failed_indices
-
+    return img_files, np.vstack(all_embeddings)
 
 def process_captions(text_model, captions, device):
     """Generate text embeddings using Sentence-BERT."""
@@ -81,7 +83,6 @@ def load_dataset(dataset_path):
     """
     Load dataset from a directory containing captions.txt and an Images folder.
     """
-    dataset_path = Path(dataset_path)
     captions_file = dataset_path / "captions.txt"
     images_dir = dataset_path / "Images"
 
@@ -90,103 +91,88 @@ def load_dataset(dataset_path):
 
     df = pd.read_csv(captions_file)
     
-    # Ensure 'image' and 'caption' columns exist
-    if 'image' not in df.columns or 'caption' not in df.columns:
-        # Try with different separator if columns are not found
-        df = pd.read_csv(captions_file, sep='|')
-        if 'image' not in df.columns or 'caption' not in df.columns:
-             # Assuming first column is image and second is caption
-            df.columns = ['image', 'caption'] + df.columns[2:].tolist()
+    if 'id' not in df.columns:
+        df['id'] = np.arange(len(df))
 
-
-    # Group captions by image
-    captions_grouped = df.groupby('image')['caption'].apply(list).reset_index()
-    
-    image_files = captions_grouped['image'].tolist()
-    image_paths = [images_dir / fname for fname in image_files]
-    captions_by_image = captions_grouped['caption'].tolist()
-
-    return image_files, image_paths, captions_by_image, df
+    return df
 
 def create_data_file(dataset_path, output_file, device=None, args={}):
     """
-    Main function to generate embeddings and save the final .pt file.
+    Main function to generate embeddings and save the final .npz file.
     """
-    # Set device
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
 
-    # Load models
     text_model = load_text_model()
     image_processor, image_model = load_image_model()
 
-    # Load dataset
     print(f"Loading dataset from: {dataset_path}")
-    image_files, image_paths, captions_by_image, df_captions = load_dataset(dataset_path)
+    df_captions = load_dataset(dataset_path)
+    all_captions = df_captions['caption'].tolist()
+    caption2img = df_captions['image'].tolist()
+    all_images = df_captions['image'].unique().tolist()
+
+    num_images = len(all_images)
+    num_captions = len(all_captions)
+    print(f"Found {num_images} images and {num_captions} total captions.")
+
+    all_images, img_embd = process_images_batch(image_processor, image_model, all_images, device, dataset_path=dataset_path)
+    images_dict = {img_name: i for i, img_name in enumerate(all_images)}
+
+    caption_embeddings = process_captions(text_model, df_captions['caption'].tolist(), device)
     
-    num_images = len(image_files)
-    print(f"Found {num_images} images and {len(df_captions)} total captions.")
+    label = np.zeros((num_captions, num_images), dtype=np.bool)
+    for idx in range(num_captions):
+        img_name = caption2img[idx]
+        img_idx = images_dict[img_name]
+        label[idx, img_idx] = 1
 
-    # Generate image embeddings
-    image_embeddings, failed_indices = process_images_batch(image_processor, image_model, image_paths, device)
-    
-    if failed_indices:
-        print(f"Warning: Failed to process {len(failed_indices)} images. They will be excluded.")
-        # Create a set of failed indices for efficient lookup
-        failed_indices_set = set(failed_indices)
-        
-        # Filter out failed images and their corresponding captions
-        original_indices = [i for i in range(num_images) if i not in failed_indices_set]
-        image_files = [image_files[i] for i in original_indices]
-        captions_by_image = [captions_by_image[i] for i in original_indices]
-        num_images = len(image_files)
+    data = {
+        'metadata/num_captions': np.array([num_captions]),
+        'metadata/num_images': np.array([num_images]),
+        'metadata/embedding_dim_text': np.array([caption_embeddings.shape[1]]),
+        'metadata/embedding_dim_image': np.array([img_embd.shape[1]]),
+        'captions/ids': df_captions['id'].to_numpy(),
+        'captions/text': np.array(all_captions),
+        'captions/embeddings': caption_embeddings,
+        'captions/label': label,
+        'images/names': np.array(all_images),
+        'images/embeddings': img_embd,
+    }
 
-    # Flatten captions and generate embeddings
-    all_captions_flat = [caption for sublist in captions_by_image for caption in sublist]
-    caption_embeddings = process_captions(text_model, all_captions_flat, device)
-
-    # Create ground truth indices
-    repeats = [len(caps) for caps in captions_by_image]
-    gt_indices = np.arange(num_images).repeat(repeats)
-
-    # Prepare data dictionary
-    data = dict(
-        caption_embd=torch.from_numpy(caption_embeddings).float(),
-        captions_text=np.array(all_captions_flat),
-        img_embd=torch.from_numpy(image_embeddings).float(),
-        img_file=np.array(image_files),
-        caption2img_idx=gt_indices
-    )
-
-    # Save to file
     print(f"Saving processed data to {output_file}")
-    torch.save(data, output_file)
+    np.savez_compressed(output_file, **data)
     print("✓ Done.")
     
     if args.create_secret_version:
-        data_secret = dict(
-            caption_embd=torch.from_numpy(caption_embeddings).float(),
-            captions_text=np.array(all_captions_flat),
-        )
-        secret_output_file = str(Path(output_file).with_name(Path(output_file).stem + "_secret.pt"))
+        data_secret = {
+            'metadata/num_captions': np.array([num_captions]),
+            'metadata/embedding_dim_text': np.array([caption_embeddings.shape[1]]),
+            'metadata/embedding_dim_image': np.array([img_embd.shape[1]]),
+            'captions/ids': df_captions['id'].to_numpy(),
+            'captions/text': np.array(all_captions),
+            'captions/embeddings': caption_embeddings,
+        }
+
+        secret_output_file = str(Path(output_file).with_suffix('.clean.npz'))
         print(f"Saving secret version to {secret_output_file}")
-        torch.save(data_secret, secret_output_file)
+        np.savez_compressed(secret_output_file, **data_secret)
         print("✓ Secret version saved.")
         
 
 def main():
-    parser = argparse.ArgumentParser(description="Preprocess image-caption dataset and save to a .pt file.", add_help=True)
+    parser = argparse.ArgumentParser(description="Preprocess image-caption dataset and save to a .npz file.", add_help=True)
     parser.add_argument(
         "input_folder",
-        type=str,
-        help="Path to the dataset folder (e.g., 'data/flickr30k_challenge/train')."
+        type=Path,
+        help="Path to the dataset folder (e.g., 'data/train')."
     )
     parser.add_argument(
         "--output-file", '-o',
         type=str,
-        default="processed_data.pt",
-        help="Path to save the output .pt file."
+        default="processed_data.npz",
+        help="Path to save the output .npz file."
     )
     parser.add_argument(
         "--create-secret-version",

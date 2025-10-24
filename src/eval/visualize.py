@@ -5,13 +5,16 @@ from PIL import Image
 import torch
 
 @torch.inference_mode()
-def visualize_retrieval(pred_embeddings: torch.Tensor, gt_index: int, image_files: list, caption_text: str, 
+def visualize_retrieval(
+    pred_embeddings: torch.Tensor, 
+    gt_index: int, 
+    image_files: list, 
+    caption_text: str, 
                        image_embeddings: torch.Tensor, k=5, dataset_path="data/train"):
     """
     Visualize a single retrieval example.
     
     Args:
-        translator: Translator module
         pred_embedding: (768,) single text embedding translated to image space
         gt_index: ground truth image index
         image_files: list of image filenames
@@ -22,6 +25,7 @@ def visualize_retrieval(pred_embeddings: torch.Tensor, gt_index: int, image_file
     """    
     # Search using cosine similarity
     similarities = (image_embeddings @ pred_embeddings.T).squeeze().numpy()
+    
     retrieved_indices = np.argsort(-similarities)[:k]
     distances = -similarities[retrieved_indices]
     
