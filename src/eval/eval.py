@@ -5,7 +5,7 @@ from .metrics import recall_at_k, mrr, ndcg
 
 
 @torch.inference_mode()
-def evaluate_retrieval(translated_embd, image_embd, gt_indices, max_indices = 100, batch_size=100):
+def evaluate_retrieval(translated_embd, image_embd, gt_indices, max_indices = 99, batch_size=100):
     """Evaluate retrieval performance using cosine similarity
     Args:
         translated_embd: (N_captions, D) translated caption embeddings
@@ -39,8 +39,8 @@ def evaluate_retrieval(translated_embd, image_embd, gt_indices, max_indices = 10
         batch_similarity = batch_translated @ batch_img_embd.T
 
         # Get top-k predictions for this batch
-        batch_indices = batch_similarity.topk(k=max_indices, dim=1, sorted=True).indices + start_idx
-        all_sorted_indices.append(batch_indices)
+        batch_indices = batch_similarity.topk(k=max_indices, dim=1, sorted=True).indices.numpy()
+        all_sorted_indices.append(gt_indices[batch_slice][batch_indices])
 
         # Compute L2 distance for this batch
         batch_gt = gt_indices[batch_slice]
@@ -49,7 +49,7 @@ def evaluate_retrieval(translated_embd, image_embd, gt_indices, max_indices = 10
         l2_distances.append(batch_l2)
     
     # Reassemble the fragments
-    sorted_indices = torch.cat(all_sorted_indices, dim=0)
+    sorted_indices = np.concatenate(all_sorted_indices, axis=0)
     
     # Apply the sacred metrics to the whole
     metrics = {

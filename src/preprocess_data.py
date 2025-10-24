@@ -8,13 +8,13 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 
-def load_text_model(model_name="sentence-transformers/all-MiniLM-L6-v2"):
+def load_text_model(model_name="sentence-transformers/roberta-large-nli-stsb-mean-tokens"):
     """Load Sentence-BERT text encoder."""
     print(f"Loading text model: {model_name}")
     return SentenceTransformer(model_name)
 
 
-def load_image_model(model_name="facebook/dinov2-base"):
+def load_image_model(model_name="facebook/dinov2-giant"):
     """Load DINOv2 image encoder."""
     print(f"Loading image model: {model_name}")
     image_processor = AutoImageProcessor.from_pretrained(model_name, use_fast=True)
